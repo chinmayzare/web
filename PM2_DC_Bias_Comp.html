@@ -1,0 +1,930 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.process_msg(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      msg = JSON.parse(msg.content.data);
+      var comm_id = msg["comm_id"]
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg['traceback'])
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if(this.cached) {
+    this.update(frame)
+  } else {
+    this.dynamic_update(frame)
+  }
+}
+
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+}
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+var JS_MIME_TYPE = 'application/javascript';
+var HTML_MIME_TYPE = 'text/html';
+var EXEC_MIME_TYPE = 'application/vnd.holoviews_exec.v0+json';
+var CLASS_NAME = 'output';
+
+/**
+ * Render data to the DOM node
+ */
+function render(props, node) {
+  var div = document.createElement("div");
+  var script = document.createElement("script");
+  node.appendChild(div);
+  node.appendChild(script);
+}
+
+/**
+ * Handle when a new output is added
+ */
+function handle_add_output(event, handle) {
+  var output_area = handle.output_area;
+  var output = handle.output;
+  if (!output.data.hasOwnProperty(EXEC_MIME_TYPE)) {
+    return
+  }
+  var id = output.metadata[EXEC_MIME_TYPE]["id"];
+  var toinsert = output_area.element.find("." + CLASS_NAME.split(' ')[0]);
+  if (id !== undefined) {
+    var nchildren = toinsert.length;
+    toinsert[nchildren-1].children[0].innerHTML = output.data[HTML_MIME_TYPE];
+    toinsert[nchildren-1].children[1].textContent = output.data[JS_MIME_TYPE];
+    output_area._hv_plot_id = id;
+    if ((window.Bokeh !== undefined) && (id in Bokeh.index)) {
+      HoloViews.plot_index[id] = Bokeh.index[id];
+    } else {
+      HoloViews.plot_index[id] = null;
+    }
+  }
+}
+
+/**
+ * Handle when an output is cleared or removed
+ */
+function handle_clear_output(event, handle) {
+  var id = handle.cell.output_area._hv_plot_id;
+  if ((id === undefined) || !(id in HoloViews.plot_index)) { return; }
+  var comm = window.HoloViews.comm_manager.get_client_comm("hv-extension-comm", "hv-extension-comm", function () {});
+  if (comm !== null) {
+    comm.send({event_type: 'delete', 'id': id});
+  }
+  delete HoloViews.plot_index[id];
+  if ((window.Bokeh !== undefined) & (id in window.Bokeh.index)) {
+    window.Bokeh.index[id].model.document.clear();
+    delete Bokeh.index[id];
+  }
+}
+
+/**
+ * Handle kernel restart event
+ */
+function handle_kernel_cleanup(event, handle) {
+  delete HoloViews.comms["hv-extension-comm"];
+  window.HoloViews.plot_index = {}
+}
+
+/**
+ * Handle update_display_data messages
+ */
+function handle_update_output(event, handle) {
+  handle_clear_output(event, {cell: {output_area: handle.output_area}})
+  handle_add_output(event, handle)
+}
+
+function register_renderer(events, OutputArea) {
+  function append_mime(data, metadata, element) {
+    // create a DOM node to render to
+    var toinsert = this.create_output_subarea(
+    metadata,
+    CLASS_NAME,
+    EXEC_MIME_TYPE
+    );
+    this.keyboard_manager.register_events(toinsert);
+    // Render to node
+    var props = {data: data, metadata: metadata[EXEC_MIME_TYPE]};
+    render(props, toinsert[0]);
+    element.append(toinsert);
+    return toinsert
+  }
+
+  events.on('output_added.OutputArea', handle_add_output);	
+  events.on('output_updated.OutputArea', handle_update_output);
+  events.on('clear_output.CodeCell', handle_clear_output);
+  events.on('delete.Cell', handle_clear_output);
+  events.on('kernel_ready.Kernel', handle_kernel_cleanup);
+
+  OutputArea.prototype.register_mime_type(EXEC_MIME_TYPE, append_mime, {
+    safe: true,
+    index: 0
+  });
+}
+
+if (window.Jupyter !== undefined) {
+  try {
+    var events = require('base/js/events');
+    var OutputArea = require('notebook/js/outputarea').OutputArea;
+    if (OutputArea.prototype.mime_types().indexOf(EXEC_MIME_TYPE) == -1) {
+      register_renderer(events, OutputArea);
+    }
+  } catch(err) {
+  }
+}
+
+// Define MPL specific subclasses
+function MPLSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function MPLScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+MPLSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+MPLScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var MPLMethods = {
+  init_slider : function(init_val){
+    if(this.load_json) {
+      this.from_json()
+    } else {
+      this.update_cache();
+    }
+    if (this.dynamic | !this.cached | (this.current_vals === undefined)) {
+      this.update(0)
+    } else {
+      this.set_frame(this.current_vals[0], 0)
+    }
+  },
+  process_msg : function(msg) {
+    var data = msg.content.data;
+    this.frames[this.current] = data;
+    this.update_cache(true);
+    this.update(this.current);
+  }
+}
+// Extend MPL widgets with backend specific methods
+extend(MPLSelectionWidget.prototype, MPLMethods);
+extend(MPLScrubberWidget.prototype, MPLMethods);
+
+window.HoloViews.MPLSelectionWidget = MPLSelectionWidget
+window.HoloViews.MPLScrubberWidget = MPLScrubberWidget
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+</script>
+<script type="text/javascript">
+    function CommManager() {
+    }
+
+    CommManager.prototype.register_target = function() {
+    }
+
+    CommManager.prototype.get_client_comm = function() {
+    }
+
+    window.HoloViews.comm_manager = CommManager()
+    </script>
+
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-0.12.16.min.css">
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.16.min.css">
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.16.min.css">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+
+div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+<div class="bk-root">
+    <div class="bk-plotdiv" id="df4ca559-5aa4-42a1-b879-0add2b22d0b6"></div>
+</div>
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"67e4108b-2b7a-43c3-a7ba-98e773663696":{"roots":{"references":[{"attributes":{"active_drag":"auto","active_inspect":"auto","active_scroll":"auto","active_tap":"auto","tools":[{"id":"a4feca12-0694-457a-997b-278d874f712d","type":"HoverTool"},{"id":"c98ec3ea-3aa5-41eb-b76a-af2209967539","type":"SaveTool"},{"id":"0412dccb-2070-453a-a247-bb3b8deded4d","type":"PanTool"},{"id":"fd4d3ed9-3e7e-4ac6-83b8-9b1792157372","type":"WheelZoomTool"},{"id":"6b2b1351-e57f-4a39-8767-682578296027","type":"BoxZoomTool"},{"id":"55b969b5-f055-44bd-a18c-d1e37914e534","type":"ResetTool"}]},"id":"bb739614-e289-417c-b96b-eaf17a069c74","type":"Toolbar"},{"attributes":{"callback":null,"data":{"PM2_DC_Bias_Comp":{"__ndarray__":"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","dtype":"float64","shape":[1000]},"sst":["2018-05-25 21:06:22.020","2018-05-25 21:12:23.620","2018-05-25 21:17:32.130","2018-05-25 21:30:05.920","2018-05-25 21:36:51.530","2018-05-25 21:43:05.630","2018-05-25 21:49:03.730","2018-05-25 21:55:18.920","2018-05-25 22:01:25.020","2018-05-25 22:07:41.620","2018-05-25 22:13:54.720","2018-05-25 22:20:15.420","2018-05-25 22:26:31.020","2018-05-25 22:31:56.030","2018-05-25 22:37:39.130","2018-05-25 22:49:26.090","2018-05-25 22:54:19.100","2018-05-25 22:59:14.190","2018-05-25 23:04:43.090","2018-05-25 23:09:33.580","2018-05-25 23:15:49.680","2018-05-25 23:22:09.280","2018-05-25 23:28:23.990","2018-05-25 23:34:21.590","2018-05-25 23:40:38.700","2018-05-25 23:46:48.300","2018-05-25 23:53:03.880","2018-05-25 23:59:14.980","2018-05-26 04:24:39.400","2018-05-26 04:32:15.210","2018-05-26 04:37:20.700","2018-05-26 04:43:36.300","2018-05-26 04:49:54.470","2018-05-26 04:56:07.470","2018-05-26 05:01:06.960","2018-05-26 05:05:53.470","2018-05-26 05:12:10.570","2018-05-26 05:17:15.560","2018-05-26 05:22:20.660","2018-05-26 05:28:12.170","2018-05-26 05:33:35.670","2018-05-26 19:16:45.200","2018-05-26 19:21:52.800","2018-05-26 23:05:22.920","2018-05-26 23:10:47.020","2018-05-26 23:16:11.020","2018-05-26 23:21:36.030","2018-05-26 23:26:58.630","2018-05-26 23:32:20.620","2018-05-26 23:37:32.130","2018-05-26 23:42:53.730","2018-05-26 23:48:18.720","2018-05-26 23:53:33.220","2018-05-26 23:58:56.320","2018-05-27 00:04:19.830","2018-05-27 00:09:24.320","2018-05-27 01:17:28.240","2018-05-27 01:22:48.750","2018-05-27 06:00:27.510","2018-05-27 06:06:08.510","2018-05-27 06:11:26.600","2018-05-27 06:16:46.110","2018-05-27 06:21:56.120","2018-05-27 06:27:23.730","2018-05-27 06:32:42.210","2018-05-27 06:38:07.710","2018-05-27 06:43:11.200","2018-05-27 06:48:35.300","2018-05-27 06:53:38.010","2018-05-27 06:59:03.820","2018-05-27 07:04:22.310","2018-05-27 07:09:37.910","2018-05-27 07:15:04.410","2018-05-27 07:20:22.900","2018-05-27 07:25:30.500","2018-05-27 07:41:00.550","2018-05-27 07:46:06.560","2018-05-27 07:51:01.060","2018-05-27 07:56:28.560","2018-05-27 08:01:56.660","2018-05-27 08:06:54.660","2018-05-27 08:12:11.150","2018-05-27 08:17:34.160","2018-05-27 08:22:23.160","2018-05-27 08:27:37.260","2018-05-27 08:32:59.250","2018-05-27 08:38:22.760","2018-05-27 08:43:48.360","2018-05-27 08:49:13.350","2018-05-27 08:54:34.860","2018-05-27 08:59:35.360","2018-05-27 09:05:02.960","2018-05-27 09:10:23.950","2018-05-27 09:15:47.050","2018-05-27 09:21:10.560","2018-05-27 09:26:37.570","2018-05-27 09:32:03.470","2018-05-27 09:37:26.860","2018-05-27 09:42:52.460","2018-05-27 09:48:14.970","2018-05-27 09:53:42.960","2018-05-27 09:59:05.060","2018-05-27 10:04:29.560","2018-05-27 10:09:55.160","2018-05-27 10:15:17.170","2018-05-27 10:20:43.660","2018-05-27 14:27:12.610","2018-05-27 14:32:26.600","2018-05-27 14:37:17.600","2018-05-27 15:06:10.350","2018-05-27 15:11:35.450","2018-05-27 15:17:01.950","2018-05-27 15:22:26.050","2018-05-27 15:27:53.050","2018-05-27 15:33:16.550","2018-05-27 15:38:08.560","2018-05-27 15:43:10.050","2018-05-27 15:48:17.150","2018-05-27 15:53:43.150","2018-05-27 15:59:07.640","2018-05-27 16:04:33.740","2018-05-27 16:09:32.250","2018-05-27 16:14:40.260","2018-05-27 16:19:47.750","2018-05-27 16:25:12.750","2018-05-27 16:30:34.350","2018-05-27 16:35:32.340","2018-05-27 16:40:31.140","2018-05-27 16:45:56.030","2018-05-27 16:51:16.520","2018-05-27 16:56:30.620","2018-05-27 17:01:41.120","2018-05-27 22:30:01.880","2018-05-27 22:35:27.390","2018-05-27 22:40:47.580","2018-05-27 22:46:12.900","2018-05-27 22:51:24.410","2018-05-27 22:56:48.400","2018-05-27 23:02:13.000","2018-05-27 23:07:37.510","2018-05-27 23:12:52.010","2018-05-27 23:18:15.610","2018-05-27 23:23:40.600","2018-05-27 23:28:26.110","2018-05-27 23:33:54.600","2018-05-28 02:00:17.390","2018-05-28 02:06:10.500","2018-05-28 02:11:35.600","2018-05-28 02:17:02.600","2018-05-28 02:22:25.200","2018-05-28 02:27:25.190","2018-05-28 02:32:44.700","2018-05-28 02:38:08.190","2018-05-28 02:54:12.820","2018-05-28 02:59:35.420","2018-05-28 08:04:24.740","2018-05-28 08:09:50.730","2018-05-28 08:15:13.830","2018-05-28 08:20:20.340","2018-05-28 08:25:41.330","2018-05-28 08:30:53.340","2018-05-28 08:36:19.440","2018-05-28 08:41:43.940","2018-05-28 08:47:10.560","2018-05-28 08:51:56.460","2018-05-28 08:57:16.050","2018-05-28 09:02:42.550","2018-05-28 09:29:06.750","2018-05-28 09:34:36.260","2018-05-28 09:40:01.260","2018-05-28 09:45:33.460","2018-06-02 20:27:15.550","2018-06-02 20:32:43.040","2018-06-02 20:38:01.040","2018-06-02 20:43:19.140","2018-06-02 20:48:43.650","2018-06-02 20:53:56.640","2018-06-02 20:59:11.640","2018-06-02 21:04:27.740","2018-06-02 21:09:55.230","2018-06-02 21:15:20.040","2018-06-02 21:20:44.040","2018-06-02 21:25:43.530","2018-06-02 21:30:45.040","2018-06-02 21:37:16.140","2018-06-02 21:42:51.240","2018-06-02 21:48:13.750","2018-06-02 21:53:31.440","2018-06-02 21:58:44.840","2018-06-02 22:03:45.840","2018-06-02 22:08:57.830","2018-06-02 22:14:17.340","2018-06-02 22:19:38.940","2018-06-02 22:34:54.400","2018-06-02 22:40:49.500","2018-06-03 12:22:07.800","2018-06-03 12:26:51.730","2018-06-03 12:32:11.240","2018-06-03 12:37:25.930","2018-06-03 12:42:41.230","2018-06-03 12:48:04.330","2018-06-03 12:52:52.840","2018-06-03 12:58:21.940","2018-06-03 13:03:45.430","2018-06-03 13:08:52.940","2018-06-03 13:14:09.940","2018-06-03 13:19:32.430","2018-06-03 13:24:38.940","2018-06-03 13:30:05.040","2018-06-03 13:35:09.030","2018-06-03 13:40:33.540","2018-06-03 13:45:50.540","2018-06-03 13:50:44.140","2018-06-03 13:55:44.040","2018-06-03 14:00:39.540","2018-06-03 14:05:54.030","2018-06-03 14:11:07.630","2018-06-03 14:16:28.230","2018-06-03 15:25:22.110","2018-06-03 15:30:50.120","2018-06-03 15:36:16.720","2018-06-03 15:41:41.720","2018-06-03 15:46:48.210","2018-06-03 15:51:51.220","2018-06-03 15:56:57.210","2018-06-03 16:02:10.310","2018-06-03 16:07:07.320","2018-06-03 16:12:28.820","2018-06-03 16:17:51.310","2018-06-03 16:23:00.820","2018-06-03 17:37:01.300","2018-06-03 17:42:25.900","2018-06-03 17:47:20.400","2018-06-03 17:52:33.890","2018-06-03 17:57:54.400","2018-06-03 18:02:41.400","2018-06-03 18:07:36.890","2018-06-03 18:12:25.900","2018-06-03 18:17:21.000","2018-06-03 18:22:44.900","2018-06-03 18:28:04.550","2018-06-03 18:33:01.540","2018-06-03 19:51:16.330","2018-06-03 19:57:11.940","2018-06-03 20:02:36.630","2018-06-03 20:08:00.050","2018-06-03 20:13:26.040","2018-06-03 20:18:50.140","2018-06-03 20:34:21.850","2018-06-03 20:39:28.360","2018-06-03 20:44:54.960","2018-06-03 20:49:49.450","2018-06-03 20:55:02.950","2018-06-03 21:00:07.440","2018-06-03 21:05:07.450","2018-06-03 21:10:00.950","2018-06-03 21:14:59.940","2018-06-03 21:20:03.450","2018-06-03 21:25:25.460","2018-06-03 21:30:46.060","2018-06-03 21:35:43.050","2018-06-03 21:40:31.640","2018-06-03 21:45:22.950","2018-06-03 21:50:22.950","2018-06-03 21:55:39.440","2018-06-03 22:00:50.040","2018-06-03 22:06:03.550","2018-06-03 22:11:07.550","2018-06-03 22:16:14.040","2018-06-03 22:21:17.050","2018-06-03 22:26:16.840","2018-06-03 22:31:19.940","2018-06-03 22:36:16.450","2018-06-03 22:41:29.940","2018-06-03 22:46:31.040","2018-06-03 22:51:27.450","2018-06-03 22:56:42.940","2018-06-04 04:44:54.600","2018-06-04 04:50:23.100","2018-06-04 04:55:47.210","2018-06-04 05:00:50.210","2018-06-04 05:06:06.710","2018-06-04 05:11:16.710","2018-06-04 05:16:40.810","2018-06-04 05:21:54.800","2018-06-04 05:27:22.310","2018-06-04 05:32:44.910","2018-06-04 05:37:42.400","2018-06-04 05:43:04.910","2018-06-04 06:31:44.570","2018-06-04 06:37:04.570","2018-06-04 06:42:27.560","2018-06-04 06:47:44.660","2018-06-04 06:53:12.170","2018-06-04 06:58:16.670","2018-06-04 07:03:22.160","2018-06-04 07:08:36.670","2018-06-04 07:14:00.770","2018-06-04 07:19:23.260","2018-06-04 07:24:35.470","2018-06-04 07:29:58.370","2018-06-04 07:35:03.870","2018-06-04 07:40:26.860","2018-06-04 07:45:27.870","2018-06-04 07:50:46.060","2018-06-04 07:55:55.970","2018-06-04 08:01:02.960","2018-06-04 08:05:53.470","2018-06-04 08:10:52.960","2018-06-04 08:15:51.470","2018-06-04 08:21:05.970","2018-06-04 08:26:12.760","2018-06-04 09:54:22.300","2018-06-04 10:00:30.300","2018-06-04 10:05:49.310","2018-06-04 10:11:17.910","2018-06-04 10:16:45.900","2018-06-04 10:22:50.500","2018-06-04 10:28:56.100","2018-06-04 10:35:15.800","2018-06-04 10:41:35.900","2018-06-04 10:47:50.500","2018-06-04 10:52:42.600","2018-06-04 10:58:20.200","2018-06-04 11:04:39.800","2018-06-04 15:23:20.800","2018-06-04 15:28:36.390","2018-06-04 15:33:43.400","2018-06-04 15:40:00.000","2018-06-04 15:44:50.010","2018-06-04 15:51:00.590","2018-06-04 15:57:01.690","2018-06-04 16:03:02.790","2018-06-04 16:09:18.390","2018-06-04 16:15:35.110","2018-06-04 16:21:42.710","2018-06-04 16:26:38.200","2018-06-04 16:32:54.300","2018-06-04 18:59:46.830","2018-06-04 19:05:07.930","2018-06-04 19:10:23.920","2018-06-04 19:15:55.020","2018-06-04 19:21:09.020","2018-06-04 19:32:13.350","2018-06-04 19:38:12.450","2018-06-04 19:44:15.040","2018-06-04 19:50:12.640","2018-06-04 19:56:28.240","2018-06-04 20:02:12.840","2018-06-05 00:10:05.010","2018-06-05 00:15:43.610","2018-06-05 00:20:33.110","2018-06-05 00:25:28.100","2018-06-05 00:30:15.610","2018-06-05 00:35:12.500","2018-06-05 00:40:57.110","2018-06-05 00:51:14.480","2018-06-05 00:56:25.490","2018-06-05 01:02:39.090","2018-06-05 01:08:43.880","2018-06-05 01:14:52.280","2018-06-05 04:16:45.470","2018-06-05 04:22:27.960","2018-06-05 04:27:52.060","2018-06-05 04:32:58.060","2018-06-05 04:38:52.660","2018-06-05 04:44:16.170","2018-06-05 04:49:10.160","2018-06-05 04:54:06.000","2018-06-05 04:59:17.910","2018-06-05 05:04:34.400","2018-06-05 05:09:42.400","2018-06-05 05:15:06.000","2018-06-05 06:31:22.610","2018-06-05 06:37:06.690","2018-06-05 06:42:23.700","2018-06-05 06:47:38.210","2018-06-05 07:03:24.240","2018-06-05 07:08:15.250","2018-06-05 07:13:32.240","2018-06-05 07:18:53.740","2018-06-05 07:23:55.230","2018-06-05 07:28:49.240","2018-06-05 08:47:10.040","2018-06-05 09:03:04.490","2018-06-05 09:08:29.890","2018-06-05 09:13:54.390","2018-06-05 09:19:17.490","2018-06-05 09:24:43.000","2018-06-05 09:30:09.990","2018-06-05 09:35:20.090","2018-06-05 09:40:45.100","2018-06-05 09:46:08.590","2018-06-05 09:51:03.590","2018-06-05 09:56:16.600","2018-06-05 10:01:40.700","2018-06-05 10:06:28.690","2018-06-05 10:11:53.700","2018-06-05 10:17:21.330","2018-06-05 10:22:45.790","2018-06-05 10:27:40.790","2018-06-05 10:33:00.800","2018-06-05 10:38:12.790","2018-06-05 10:43:39.890","2018-06-05 10:49:06.890","2018-06-05 10:53:57.360","2018-06-05 13:14:31.960","2018-06-05 13:20:25.060","2018-06-05 13:25:43.160","2018-06-05 13:31:08.660","2018-06-05 13:36:32.650","2018-06-05 13:52:29.950","2018-06-05 13:57:53.950","2018-06-05 14:03:01.050","2018-06-05 14:08:26.960","2018-06-05 14:13:52.060","2018-06-05 14:19:16.550","2018-06-05 14:24:38.660","2018-06-05 15:49:41.460","2018-06-05 15:55:07.860","2018-06-05 16:00:35.370","2018-06-05 16:06:01.460","2018-06-05 16:11:19.470","2018-06-05 16:17:17.060","2018-06-05 16:23:13.160","2018-06-05 16:29:09.770","2018-06-05 16:35:06.860","2018-06-05 16:41:02.460","2018-06-05 16:47:00.070","2018-06-05 16:52:57.670","2018-06-05 16:58:53.260","2018-06-05 20:07:42.550","2018-06-05 20:13:24.640","2018-06-05 20:18:48.640","2018-06-05 20:24:01.650","2018-06-05 20:29:02.140","2018-06-05 20:34:24.740","2018-06-05 20:40:08.340","2018-06-05 20:45:30.850","2018-06-05 20:50:56.350","2018-06-05 20:56:20.450","2018-06-05 21:02:34.050","2018-06-05 21:07:22.040","2018-06-05 21:12:47.280","2018-06-05 21:33:22.420","2018-06-05 21:38:50.320","2018-06-05 21:44:11.830","2018-06-05 21:49:35.430","2018-06-05 21:54:56.920","2018-06-05 22:00:17.520","2018-06-05 22:06:33.630","2018-06-05 22:12:48.230","2018-06-05 22:18:07.720","2018-06-05 22:23:33.320","2018-06-05 22:28:52.320","2018-06-05 22:34:32.920","2018-06-05 22:40:29.020","2018-06-06 06:52:13.680","2018-06-06 06:58:58.280","2018-06-06 07:05:13.980","2018-06-06 07:11:27.690","2018-06-06 07:16:36.590","2018-06-06 07:21:45.080","2018-06-06 07:27:57.180","2018-06-06 07:33:07.180","2018-06-06 07:38:34.280","2018-06-06 07:43:35.790","2018-06-06 07:49:23.390","2018-06-06 07:54:48.380","2018-06-06 07:59:56.890","2018-06-06 08:12:51.920","2018-06-06 08:18:12.930","2018-06-06 08:23:02.920","2018-06-06 08:28:26.220","2018-06-06 08:34:18.530","2018-06-06 08:40:23.720","2018-06-06 08:47:01.330","2018-06-06 08:52:49.420","2018-06-06 08:58:54.020","2018-06-06 09:05:10.630","2018-06-06 09:11:14.730","2018-06-06 09:17:30.930","2018-06-06 09:23:44.030","2018-06-06 09:34:17.390","2018-06-06 09:39:08.190","2018-06-06 09:44:30.290","2018-06-06 09:49:45.800","2018-06-06 09:54:35.290","2018-06-06 09:59:45.800","2018-06-06 10:05:15.290","2018-06-06 10:10:39.900","2018-06-06 10:15:48.390","2018-06-06 10:20:51.900","2018-06-06 10:27:41.590","2018-06-06 10:45:41.230","2018-06-06 10:50:32.270","2018-06-06 10:55:56.230","2018-06-06 11:01:01.730","2018-06-06 11:06:51.340","2018-06-06 11:11:37.840","2018-06-06 11:17:06.330","2018-06-06 11:22:57.930","2018-06-06 11:28:21.440","2018-06-06 11:33:22.930","2018-06-06 11:38:29.940","2018-06-06 11:43:53.540","2018-06-06 11:49:14.540","2018-06-06 13:11:32.400","2018-06-06 13:16:39.400","2018-06-06 13:21:40.410","2018-06-06 13:27:06.000","2018-06-06 13:32:30.510","2018-06-06 13:38:20.590","2018-06-06 13:44:18.700","2018-06-06 13:50:15.300","2018-06-06 13:56:26.400","2018-06-06 14:01:12.390","2018-06-06 14:06:36.900","2018-06-06 14:11:54.510","2018-06-06 16:01:08.600","2018-06-06 16:07:07.200","2018-06-06 16:12:06.210","2018-06-06 16:17:05.110","2018-06-06 16:22:31.710","2018-06-06 16:27:41.200","2018-06-06 16:33:03.710","2018-06-06 16:38:29.640","2018-06-06 16:43:51.130","2018-06-06 16:49:17.940","2018-06-06 16:54:20.230","2018-06-06 16:59:45.240","2018-06-06 17:04:45.730","2018-06-06 17:10:02.240","2018-06-06 17:15:13.340","2018-06-06 17:20:33.330","2018-06-06 17:25:33.840","2018-06-06 17:30:54.830","2018-06-06 17:36:20.530","2018-06-06 17:41:44.440","2018-06-06 17:47:00.930","2018-06-06 17:52:22.030","2018-06-06 17:57:45.530","2018-06-06 18:03:08.040","2018-06-06 18:08:31.140","2018-06-06 18:13:53.130","2018-06-06 19:27:20.930","2018-06-06 19:33:08.040","2018-06-06 19:38:31.640","2018-06-06 19:43:55.130","2018-06-06 19:49:14.640","2018-06-06 19:54:37.740","2018-06-06 19:59:57.230","2018-06-06 20:05:21.240","2018-06-06 20:10:28.360","2018-06-06 20:15:52.340","2018-06-06 20:21:03.830","2018-06-07 01:02:39.600","2018-06-07 01:08:00.500","2018-06-07 01:13:22.510","2018-06-07 01:18:32.000","2018-06-07 01:23:51.990","2018-06-07 01:29:12.090","2018-06-07 01:34:39.600","2018-06-07 03:52:20.110","2018-06-07 03:57:41.110","2018-06-07 04:02:40.110","2018-06-07 04:07:47.610","2018-06-07 04:13:02.110","2018-06-07 04:18:05.110","2018-06-07 04:23:00.610","2018-06-07 04:28:14.110","2018-06-07 04:33:13.110","2018-06-07 04:38:15.340","2018-06-07 04:43:12.350","2018-06-07 07:18:06.510","2018-06-07 07:23:19.520","2018-06-07 07:28:43.620","2018-06-07 07:34:08.620","2018-06-07 07:39:35.110","2018-06-07 07:45:01.210","2018-06-07 07:50:16.220","2018-06-07 07:55:39.820","2018-06-07 08:01:08.810","2018-06-07 08:06:26.820","2018-06-07 08:11:47.410","2018-06-07 08:17:01.920","2018-06-07 08:22:24.910","2018-06-07 08:27:47.010","2018-06-07 08:33:34.020","2018-06-07 08:39:22.610","2018-06-07 08:44:54.200","2018-06-07 08:50:25.210","2018-06-07 08:55:56.310","2018-06-07 09:01:23.910","2018-06-07 09:06:56.900","2018-06-07 09:12:19.910","2018-06-07 09:17:45.900","2018-06-07 09:23:16.010","2018-06-07 09:28:42.110","2018-06-07 12:48:01.140","2018-06-07 12:53:45.740","2018-06-07 12:59:11.340","2018-06-07 13:04:11.370","2018-06-07 13:09:31.840","2018-06-07 15:45:44.200","2018-06-07 15:51:06.710","2018-06-07 15:56:27.310","2018-06-07 16:01:52.750","2018-06-07 16:07:15.740","2018-06-07 16:12:37.840","2018-06-07 16:17:58.850","2018-06-07 16:23:21.340","2018-06-07 16:28:44.940","2018-06-07 16:34:05.450","2018-06-07 16:39:25.440","2018-06-07 16:44:46.050","2018-06-07 16:50:07.540","2018-06-07 16:55:34.140","2018-06-07 17:00:35.650","2018-06-07 17:05:52.640","2018-06-07 17:11:14.150","2018-06-07 17:16:38.250","2018-06-07 17:22:03.240","2018-06-07 17:26:56.250","2018-06-07 17:32:22.240","2018-06-07 17:37:33.250","2018-06-07 17:42:54.840","2018-06-07 17:48:22.850","2018-06-07 17:53:41.950","2018-06-08 09:46:59.130","2018-06-08 09:52:26.730","2018-06-08 09:57:45.730","2018-06-08 10:02:42.230","2018-06-08 10:07:35.720","2018-06-08 10:12:22.230","2018-06-08 10:17:17.630","2018-06-08 10:22:26.230","2018-06-08 10:27:53.720","2018-06-08 10:33:13.230","2018-06-08 10:38:29.820","2018-06-08 10:43:52.830","2018-06-08 11:56:30.160","2018-06-08 12:01:53.150","2018-06-08 12:06:44.660","2018-06-08 12:11:51.150","2018-06-08 12:16:55.250","2018-06-08 12:22:01.150","2018-06-08 12:27:01.660","2018-06-08 12:32:18.150","2018-06-08 12:37:42.750","2018-06-08 12:43:06.260","2018-06-08 12:58:14.540","2018-06-08 15:06:02.610","2018-06-08 15:11:27.610","2018-06-08 15:16:53.720","2018-06-08 15:22:17.210","2018-06-08 15:27:42.200","2018-06-08 15:33:02.800","2018-06-08 15:37:53.810","2018-06-08 15:43:15.300","2018-06-08 15:48:39.810","2018-06-08 15:53:40.800","2018-06-08 15:59:04.410","2018-06-08 16:04:28.410","2018-06-08 16:09:44.910","2018-06-08 16:14:57.510","2018-06-08 16:20:05.500","2018-06-08 16:25:27.600","2018-06-08 16:30:49.500","2018-06-08 16:36:10.600","2018-06-08 16:41:00.610","2018-06-08 16:46:24.600","2018-06-08 16:51:49.110","2018-06-08 16:57:13.210","2018-06-08 17:02:16.710","2018-06-08 17:07:39.120","2018-06-08 17:12:36.040","2018-06-08 22:03:15.940","2018-06-08 22:08:05.440","2018-06-08 22:13:26.940","2018-06-08 22:18:38.550","2018-06-08 22:24:03.540","2018-06-08 22:44:53.650","2018-06-08 22:50:19.140","2018-06-08 22:55:28.650","2018-06-08 23:00:49.250","2018-06-09 02:40:15.030","2018-06-09 02:45:34.020","2018-06-09 02:50:28.530","2018-06-09 02:55:53.620","2018-06-09 03:01:16.120","2018-06-09 03:06:27.620","2018-06-09 03:11:40.120","2018-06-09 03:16:36.620","2018-06-09 03:22:02.220","2018-06-09 03:27:26.730","2018-06-09 03:32:49.220","2018-06-09 03:37:57.230","2018-06-09 03:43:18.830","2018-06-09 08:58:06.140","2018-06-09 09:03:58.740","2018-06-09 09:08:56.750","2018-06-09 09:13:53.740","2018-06-09 09:20:04.340","2018-06-09 09:26:09.450","2018-06-09 09:32:07.030","2018-06-09 09:38:22.140","2018-06-09 09:44:19.740","2018-06-09 09:50:38.840","2018-06-09 09:55:27.840","2018-06-09 10:02:24.030","2018-06-09 10:08:13.640","2018-06-09 10:33:38.920","2018-06-09 10:38:52.020","2018-06-09 10:44:13.510","2018-06-09 10:49:10.520","2018-06-09 10:54:58.120","2018-06-09 11:00:59.210","2018-06-09 11:06:52.920","2018-06-09 11:12:50.510","2018-06-09 11:18:47.610","2018-06-09 11:24:44.510","2018-06-09 11:30:29.610","2018-06-09 11:36:55.810","2018-06-09 11:43:04.920","2018-06-09 16:11:38.030","2018-06-09 16:17:42.630","2018-06-09 16:23:56.220","2018-06-09 16:29:46.330","2018-06-09 16:35:46.920","2018-06-09 16:41:35.030","2018-06-09 16:46:48.030","2018-06-09 16:52:38.630","2018-06-09 16:58:47.720","2018-06-09 17:04:50.030","2018-06-09 17:10:37.420","2018-06-09 17:16:43.030","2018-06-09 19:52:01.370","2018-06-09 19:57:43.460","2018-06-09 20:03:06.970","2018-06-09 20:08:21.070","2018-06-09 20:13:48.060","2018-06-09 20:19:41.570","2018-06-09 20:24:57.170","2018-06-09 20:30:22.170","2018-06-09 20:36:18.270","2018-06-09 20:41:43.260","2018-06-09 20:46:57.860","2018-06-09 20:52:42.870","2018-06-09 21:07:23.860","2018-06-09 21:12:58.470","2018-06-09 21:18:24.480","2018-06-09 21:23:15.470","2018-06-09 21:35:37.600","2018-06-09 21:41:29.190","2018-06-09 21:46:50.190","2018-06-09 21:52:16.300","2018-06-09 21:58:04.490","2018-06-09 22:03:33.390","2018-06-09 22:10:27.790","2018-06-09 22:15:54.220","2018-06-09 23:47:53.000","2018-06-09 23:52:56.300","2018-06-09 23:58:04.400","2018-06-10 00:04:19.010","2018-06-10 00:10:33.090","2018-06-10 00:16:46.200","2018-06-10 00:23:01.800","2018-06-10 00:29:15.500","2018-06-10 00:35:13.100","2018-06-10 00:41:25.700","2018-06-10 00:46:40.200","2018-06-10 00:52:03.800","2018-06-10 00:57:24.310","2018-06-10 01:02:21.800","2018-06-10 02:55:19.640","2018-06-10 03:00:59.740","2018-06-10 03:06:08.250","2018-06-10 03:11:50.330","2018-06-10 03:16:38.340","2018-06-10 03:22:09.330","2018-06-10 03:28:13.940","2018-06-10 03:34:30.370","2018-06-10 03:40:45.480","2018-06-10 03:46:59.080","2018-06-10 03:51:46.570","2018-06-10 03:56:38.080","2018-06-10 04:02:36.180","2018-06-10 07:23:11.560","2018-06-10 07:28:39.070","2018-06-10 07:33:43.060","2018-06-10 07:38:51.160","2018-06-10 07:44:12.170","2018-06-10 07:49:38.160","2018-06-10 07:54:27.670","2018-06-10 07:59:49.160","2018-06-10 08:05:13.770","2018-06-10 08:10:40.770","2018-06-10 08:15:50.770","2018-06-10 08:21:16.070","2018-06-10 08:26:12.060","2018-06-10 12:52:31.520","2018-06-10 12:57:41.530","2018-06-10 13:03:04.020","2018-06-10 13:08:29.120","2018-06-10 13:13:24.610","2018-06-10 13:18:11.030","2018-06-10 13:23:16.520","2018-06-10 13:28:30.620","2018-06-10 13:33:54.110","2018-06-10 13:39:17.620","2018-06-10 13:44:22.110","2018-06-10 13:49:46.220","2018-06-10 15:03:14.410","2018-06-10 15:08:39.000","2018-06-10 15:13:38.000","2018-06-10 15:19:03.000","2018-06-10 15:24:22.510","2018-06-10 15:29:11.000","2018-06-10 15:34:36.010","2018-06-10 15:40:00.610","2018-06-10 15:45:07.100","2018-06-10 15:50:14.610","2018-06-10 15:55:17.100","2018-06-10 16:00:07.110","2018-06-10 18:36:58.120","2018-06-10 18:42:05.130","2018-06-10 18:47:26.420","2018-06-10 18:52:45.130","2018-06-10 18:58:04.730","2018-06-10 19:03:27.720","2018-06-10 19:08:24.220","2018-06-10 19:14:29.820","2018-06-10 19:20:09.530","2018-06-10 19:26:15.520","2018-06-10 19:32:12.130","2018-06-10 19:38:23.720","2018-06-10 19:44:34.820","2018-06-10 19:57:40.120","2018-06-10 20:03:32.220","2018-06-10 20:08:49.720","2018-06-10 20:14:14.820","2018-06-10 20:19:37.830","2018-06-10 20:25:34.930","2018-06-10 20:31:24.020","2018-06-10 20:41:36.250","2018-06-10 20:47:03.260","2018-06-10 20:51:52.750","2018-06-10 20:57:16.850","2018-06-10 21:02:45.360","2018-06-10 21:17:06.760","2018-06-10 21:22:41.360","2018-06-10 21:27:49.350","2018-06-10 21:33:01.360","2018-06-10 21:38:33.970","2018-06-10 21:44:48.050","2018-06-10 21:50:53.660","2018-06-10 21:57:07.760","2018-06-10 22:03:13.360","2018-06-10 22:09:22.060","2018-06-10 22:15:12.550","2018-06-10 22:20:38.150","2018-06-10 22:25:53.160","2018-06-10 22:36:32.810","2018-06-10 22:41:54.320","2018-06-10 22:47:20.810","2018-06-10 22:52:45.420","2018-06-10 23:10:50.710","2018-06-10 23:16:12.220","2018-06-10 23:21:18.910","2018-06-10 23:26:16.220","2018-06-10 23:32:30.410","2018-06-10 23:38:33.520","2018-06-10 23:44:49.120","2018-06-10 23:51:08.710","2018-06-10 23:56:31.810","2018-06-11 00:01:55.320","2018-06-11 00:07:09.810","2018-06-11 00:12:08.320","2018-06-11 00:17:51.420","2018-06-11 01:54:59.430","2018-06-11 01:59:43.920","2018-06-11 02:05:26.430","2018-06-11 02:10:26.130","2018-06-11 02:15:36.930","2018-06-11 02:21:07.040","2018-06-11 02:27:05.120","2018-06-11 02:45:18.500","2018-06-11 02:51:15.600","2018-06-11 02:57:19.690","2018-06-11 03:03:31.290","2018-06-11 12:01:54.570","2018-06-11 12:07:18.670","2018-06-11 12:12:44.770","2018-06-11 12:18:06.670","2018-06-11 12:23:32.180","2018-06-11 12:28:52.270","2018-06-11 12:34:16.770","2018-06-11 12:39:17.270","2018-06-11 12:44:31.270","2018-06-11 12:49:21.270","2018-06-11 13:04:38.310","2018-06-11 13:10:01.820","2018-06-11 13:15:25.810","2018-06-11 13:20:51.910","2018-06-11 13:25:53.920","2018-06-11 13:30:39.820","2018-06-11 13:35:59.420","2018-06-11 13:41:17.910","2018-06-11 13:46:31.420","2018-06-11 13:52:01.010","2018-06-11 13:57:14.510","2018-06-11 14:02:37.020","2018-06-11 14:08:00.110","2018-06-11 18:37:52.150","2018-06-11 18:42:51.650","2018-06-11 18:47:49.150","2018-06-11 19:03:38.680","2018-06-11 19:08:49.170","2018-06-11 19:13:50.180","2018-06-11 19:19:03.170","2018-06-11 19:24:16.170","2018-06-11 19:29:39.270","2018-06-11 19:35:01.280","2018-06-11 19:40:18.270","2018-06-11 20:48:24.080","2018-06-11 21:04:18.670","2018-06-11 21:09:43.270","2018-06-11 21:14:45.760","2018-06-11 21:20:10.250","2018-06-11 21:24:56.260","2018-06-11 21:30:19.750","2018-06-11 21:35:08.260","2018-06-11 21:40:06.770","2018-06-11 21:45:31.260","2018-06-11 21:50:47.860","2018-06-12 04:22:42.390","2018-06-12 04:28:01.990","2018-06-12 04:32:50.000","2018-06-12 04:38:12.990","2018-06-12 04:43:05.500","2018-06-12 04:48:30.100","2018-06-12 04:53:52.590","2018-06-12 04:59:06.600","2018-06-12 05:04:34.180","2018-06-12 05:09:53.690","2018-06-12 05:15:17.190","2018-06-12 05:20:40.290","2018-06-12 05:26:01.000","2018-06-12 08:39:13.960","2018-06-12 08:45:51.660","2018-06-12 08:51:52.260","2018-06-12 08:57:18.770","2018-06-12 09:02:43.260","2018-06-12 09:07:48.360","2018-06-12 09:12:44.760","2018-06-12 09:17:48.890","2018-06-12 09:22:44.260","2018-06-12 09:27:50.470","2018-06-12 09:32:56.870","2018-06-12 09:38:21.360","2018-06-12 09:43:41.370","2018-06-12 12:07:06.340","2018-06-12 12:13:05.350","2018-06-12 12:18:21.940","2018-06-12 12:23:49.780","2018-06-12 12:29:11.880","2018-06-12 12:34:29.370","2018-06-12 12:39:52.380","2018-06-12 12:44:49.870","2018-06-12 12:49:36.380","2018-06-12 12:54:46.870","2018-06-12 13:00:09.380","2018-06-12 13:05:34.480","2018-06-12 13:10:50.980","2018-06-12 13:15:40.480","2018-06-12 13:21:02.480","2018-06-12 13:25:49.980","2018-06-12 13:31:11.480","2018-06-12 13:35:59.980","2018-06-12 13:41:13.480","2018-06-12 13:46:35.580","2018-06-12 13:51:58.570","2018-06-12 13:57:23.170","2018-06-12 14:02:13.070","2018-06-12 14:07:33.670","2018-06-12 14:12:26.680","2018-06-12 20:13:12.930","2018-06-12 20:18:11.940","2018-06-12 20:23:21.180","2018-06-12 20:28:21.190","2018-06-12 20:33:45.180","2018-06-12 20:39:08.790","2018-06-12 20:44:33.800","2018-06-12 20:50:00.380","2018-06-12 20:54:47.800","2018-06-12 21:00:11.380","2018-06-12 21:05:33.890","2018-06-12 21:10:58.990","2018-06-12 21:16:19.980"]},"selected":{"id":"09320f76-ad08-4b20-b62d-54579191513d","type":"Selection"},"selection_policy":{"id":"c71f4b6d-6636-43e9-86c5-76d42f5ec5ff","type":"UnionRenderers"}},"id":"1eebc360-98a8-40a1-8fc8-b5f34092e15d","type":"ColumnDataSource"},{"attributes":{},"id":"55b969b5-f055-44bd-a18c-d1e37914e534","type":"ResetTool"},{"attributes":{"overlay":{"id":"259300af-5593-4f4a-a171-94d628fbe9c1","type":"BoxAnnotation"}},"id":"6b2b1351-e57f-4a39-8767-682578296027","type":"BoxZoomTool"},{"attributes":{"callback":null,"renderers":[{"id":"5546eb16-05db-4a69-805e-e29cc8bda192","type":"GlyphRenderer"}],"tooltips":[["sst","@{sst}"],["PM2_DC_Bias_Comp","@{PM2_DC_Bias_Comp}"]]},"id":"a4feca12-0694-457a-997b-278d874f712d","type":"HoverTool"},{"attributes":{"dimension":1,"grid_line_color":{"value":null},"plot":{"id":"62ec6fc9-3d17-4fa6-8114-4c724e4bcdc6","subtype":"Figure","type":"Plot"},"ticker":{"id":"9f65d6fe-5ee5-43d9-9c06-b962afbd2dca","type":"BasicTicker"}},"id":"35016a12-1b13-40f0-88a3-a5b523b48439","type":"Grid"},{"attributes":{"plot":null,"text":"","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"81f69e55-2aaf-44e8-981e-bac10f72dc98","type":"Title"},{"attributes":{"below":[{"id":"c1decb54-b9dc-4685-8d4e-ef7fd1e480aa","type":"CategoricalAxis"}],"left":[{"id":"4aab0072-ae54-4d64-a630-dd905a5e6408","type":"LinearAxis"}],"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":350,"plot_width":15500,"renderers":[{"id":"c1decb54-b9dc-4685-8d4e-ef7fd1e480aa","type":"CategoricalAxis"},{"id":"c1104b2b-4ae9-4ce7-bb0b-cb44b4d57a47","type":"Grid"},{"id":"4aab0072-ae54-4d64-a630-dd905a5e6408","type":"LinearAxis"},{"id":"35016a12-1b13-40f0-88a3-a5b523b48439","type":"Grid"},{"id":"259300af-5593-4f4a-a171-94d628fbe9c1","type":"BoxAnnotation"},{"id":"5546eb16-05db-4a69-805e-e29cc8bda192","type":"GlyphRenderer"}],"title":{"id":"81f69e55-2aaf-44e8-981e-bac10f72dc98","type":"Title"},"toolbar":{"id":"bb739614-e289-417c-b96b-eaf17a069c74","type":"Toolbar"},"toolbar_location":"left","x_range":{"id":"7d419e1c-7595-44fe-98d4-0a83f6784e52","type":"FactorRange"},"x_scale":{"id":"c69aa210-24f4-4baf-b7c8-52a5f1d73441","type":"CategoricalScale"},"y_range":{"id":"5d0d130d-29c2-4000-9a14-cfa5fbf4b9cb","type":"Range1d"},"y_scale":{"id":"c7b75b7d-7d8e-4082-a39e-ed5c5c2244ef","type":"LinearScale"}},"id":"62ec6fc9-3d17-4fa6-8114-4c724e4bcdc6","subtype":"Figure","type":"Plot"},{"attributes":{"line_alpha":0.2,"line_color":"#30a2da","line_width":3,"x":{"field":"sst"},"y":{"field":"PM2_DC_Bias_Comp"}},"id":"f98a206d-edcb-4130-99d1-d282c3c13e30","type":"Line"},{"attributes":{},"id":"4d294b34-75a4-4b76-8a13-e046125dd41b","type":"BasicTickFormatter"},{"attributes":{"callback":null,"end":-454.9525846153847,"start":-514.8539266055047},"id":"5d0d130d-29c2-4000-9a14-cfa5fbf4b9cb","type":"Range1d"},{"attributes":{"source":{"id":"1eebc360-98a8-40a1-8fc8-b5f34092e15d","type":"ColumnDataSource"}},"id":"874fe478-00f4-49f6-a825-675a7530bfaa","type":"CDSView"},{"attributes":{"line_alpha":0.1,"line_color":"#30a2da","line_width":3,"x":{"field":"sst"},"y":{"field":"PM2_DC_Bias_Comp"}},"id":"e378369d-eb59-440b-a3a2-3373d8a02366","type":"Line"},{"attributes":{"line_color":"#30a2da","line_width":3,"x":{"field":"sst"},"y":{"field":"PM2_DC_Bias_Comp"}},"id":"95a85b61-7f3a-453b-88e5-b1a004efd261","type":"Line"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"plot":null,"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"259300af-5593-4f4a-a171-94d628fbe9c1","type":"BoxAnnotation"},{"attributes":{"grid_line_color":{"value":null},"plot":{"id":"62ec6fc9-3d17-4fa6-8114-4c724e4bcdc6","subtype":"Figure","type":"Plot"},"ticker":{"id":"7677fa97-fb14-4f7d-8501-7a5ac89c418f","type":"CategoricalTicker"}},"id":"c1104b2b-4ae9-4ce7-bb0b-cb44b4d57a47","type":"Grid"},{"attributes":{"axis_label":"PM2_DC_Bias_Comp","bounds":"auto","formatter":{"id":"4d294b34-75a4-4b76-8a13-e046125dd41b","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"62ec6fc9-3d17-4fa6-8114-4c724e4bcdc6","subtype":"Figure","type":"Plot"},"ticker":{"id":"9f65d6fe-5ee5-43d9-9c06-b962afbd2dca","type":"BasicTicker"}},"id":"4aab0072-ae54-4d64-a630-dd905a5e6408","type":"LinearAxis"},{"attributes":{},"id":"3139985f-5b2f-4600-ab75-44e37ce98bb8","type":"CategoricalTickFormatter"},{"attributes":{},"id":"9f65d6fe-5ee5-43d9-9c06-b962afbd2dca","type":"BasicTicker"},{"attributes":{},"id":"09320f76-ad08-4b20-b62d-54579191513d","type":"Selection"},{"attributes":{},"id":"0412dccb-2070-453a-a247-bb3b8deded4d","type":"PanTool"},{"attributes":{},"id":"c7b75b7d-7d8e-4082-a39e-ed5c5c2244ef","type":"LinearScale"},{"attributes":{"axis_label":"sst","bounds":"auto","formatter":{"id":"3139985f-5b2f-4600-ab75-44e37ce98bb8","type":"CategoricalTickFormatter"},"major_label_orientation":0.7853981633974483,"plot":{"id":"62ec6fc9-3d17-4fa6-8114-4c724e4bcdc6","subtype":"Figure","type":"Plot"},"ticker":{"id":"7677fa97-fb14-4f7d-8501-7a5ac89c418f","type":"CategoricalTicker"}},"id":"c1decb54-b9dc-4685-8d4e-ef7fd1e480aa","type":"CategoricalAxis"},{"attributes":{},"id":"c71f4b6d-6636-43e9-86c5-76d42f5ec5ff","type":"UnionRenderers"},{"attributes":{},"id":"c69aa210-24f4-4baf-b7c8-52a5f1d73441","type":"CategoricalScale"},{"attributes":{"data_source":{"id":"1eebc360-98a8-40a1-8fc8-b5f34092e15d","type":"ColumnDataSource"},"glyph":{"id":"95a85b61-7f3a-453b-88e5-b1a004efd261","type":"Line"},"hover_glyph":null,"muted_glyph":{"id":"f98a206d-edcb-4130-99d1-d282c3c13e30","type":"Line"},"nonselection_glyph":{"id":"e378369d-eb59-440b-a3a2-3373d8a02366","type":"Line"},"selection_glyph":null,"view":{"id":"874fe478-00f4-49f6-a825-675a7530bfaa","type":"CDSView"}},"id":"5546eb16-05db-4a69-805e-e29cc8bda192","type":"GlyphRenderer"},{"attributes":{"callback":null,"factors":["2018-05-25 21:06:22.020","2018-05-25 21:12:23.620","2018-05-25 21:17:32.130","2018-05-25 21:30:05.920","2018-05-25 21:36:51.530","2018-05-25 21:43:05.630","2018-05-25 21:49:03.730","2018-05-25 21:55:18.920","2018-05-25 22:01:25.020","2018-05-25 22:07:41.620","2018-05-25 22:13:54.720","2018-05-25 22:20:15.420","2018-05-25 22:26:31.020","2018-05-25 22:31:56.030","2018-05-25 22:37:39.130","2018-05-25 22:49:26.090","2018-05-25 22:54:19.100","2018-05-25 22:59:14.190","2018-05-25 23:04:43.090","2018-05-25 23:09:33.580","2018-05-25 23:15:49.680","2018-05-25 23:22:09.280","2018-05-25 23:28:23.990","2018-05-25 23:34:21.590","2018-05-25 23:40:38.700","2018-05-25 23:46:48.300","2018-05-25 23:53:03.880","2018-05-25 23:59:14.980","2018-05-26 04:24:39.400","2018-05-26 04:32:15.210","2018-05-26 04:37:20.700","2018-05-26 04:43:36.300","2018-05-26 04:49:54.470","2018-05-26 04:56:07.470","2018-05-26 05:01:06.960","2018-05-26 05:05:53.470","2018-05-26 05:12:10.570","2018-05-26 05:17:15.560","2018-05-26 05:22:20.660","2018-05-26 05:28:12.170","2018-05-26 05:33:35.670","2018-05-26 19:16:45.200","2018-05-26 19:21:52.800","2018-05-26 23:05:22.920","2018-05-26 23:10:47.020","2018-05-26 23:16:11.020","2018-05-26 23:21:36.030","2018-05-26 23:26:58.630","2018-05-26 23:32:20.620","2018-05-26 23:37:32.130","2018-05-26 23:42:53.730","2018-05-26 23:48:18.720","2018-05-26 23:53:33.220","2018-05-26 23:58:56.320","2018-05-27 00:04:19.830","2018-05-27 00:09:24.320","2018-05-27 01:17:28.240","2018-05-27 01:22:48.750","2018-05-27 06:00:27.510","2018-05-27 06:06:08.510","2018-05-27 06:11:26.600","2018-05-27 06:16:46.110","2018-05-27 06:21:56.120","2018-05-27 06:27:23.730","2018-05-27 06:32:42.210","2018-05-27 06:38:07.710","2018-05-27 06:43:11.200","2018-05-27 06:48:35.300","2018-05-27 06:53:38.010","2018-05-27 06:59:03.820","2018-05-27 07:04:22.310","2018-05-27 07:09:37.910","2018-05-27 07:15:04.410","2018-05-27 07:20:22.900","2018-05-27 07:25:30.500","2018-05-27 07:41:00.550","2018-05-27 07:46:06.560","2018-05-27 07:51:01.060","2018-05-27 07:56:28.560","2018-05-27 08:01:56.660","2018-05-27 08:06:54.660","2018-05-27 08:12:11.150","2018-05-27 08:17:34.160","2018-05-27 08:22:23.160","2018-05-27 08:27:37.260","2018-05-27 08:32:59.250","2018-05-27 08:38:22.760","2018-05-27 08:43:48.360","2018-05-27 08:49:13.350","2018-05-27 08:54:34.860","2018-05-27 08:59:35.360","2018-05-27 09:05:02.960","2018-05-27 09:10:23.950","2018-05-27 09:15:47.050","2018-05-27 09:21:10.560","2018-05-27 09:26:37.570","2018-05-27 09:32:03.470","2018-05-27 09:37:26.860","2018-05-27 09:42:52.460","2018-05-27 09:48:14.970","2018-05-27 09:53:42.960","2018-05-27 09:59:05.060","2018-05-27 10:04:29.560","2018-05-27 10:09:55.160","2018-05-27 10:15:17.170","2018-05-27 10:20:43.660","2018-05-27 14:27:12.610","2018-05-27 14:32:26.600","2018-05-27 14:37:17.600","2018-05-27 15:06:10.350","2018-05-27 15:11:35.450","2018-05-27 15:17:01.950","2018-05-27 15:22:26.050","2018-05-27 15:27:53.050","2018-05-27 15:33:16.550","2018-05-27 15:38:08.560","2018-05-27 15:43:10.050","2018-05-27 15:48:17.150","2018-05-27 15:53:43.150","2018-05-27 15:59:07.640","2018-05-27 16:04:33.740","2018-05-27 16:09:32.250","2018-05-27 16:14:40.260","2018-05-27 16:19:47.750","2018-05-27 16:25:12.750","2018-05-27 16:30:34.350","2018-05-27 16:35:32.340","2018-05-27 16:40:31.140","2018-05-27 16:45:56.030","2018-05-27 16:51:16.520","2018-05-27 16:56:30.620","2018-05-27 17:01:41.120","2018-05-27 22:30:01.880","2018-05-27 22:35:27.390","2018-05-27 22:40:47.580","2018-05-27 22:46:12.900","2018-05-27 22:51:24.410","2018-05-27 22:56:48.400","2018-05-27 23:02:13.000","2018-05-27 23:07:37.510","2018-05-27 23:12:52.010","2018-05-27 23:18:15.610","2018-05-27 23:23:40.600","2018-05-27 23:28:26.110","2018-05-27 23:33:54.600","2018-05-28 02:00:17.390","2018-05-28 02:06:10.500","2018-05-28 02:11:35.600","2018-05-28 02:17:02.600","2018-05-28 02:22:25.200","2018-05-28 02:27:25.190","2018-05-28 02:32:44.700","2018-05-28 02:38:08.190","2018-05-28 02:54:12.820","2018-05-28 02:59:35.420","2018-05-28 08:04:24.740","2018-05-28 08:09:50.730","2018-05-28 08:15:13.830","2018-05-28 08:20:20.340","2018-05-28 08:25:41.330","2018-05-28 08:30:53.340","2018-05-28 08:36:19.440","2018-05-28 08:41:43.940","2018-05-28 08:47:10.560","2018-05-28 08:51:56.460","2018-05-28 08:57:16.050","2018-05-28 09:02:42.550","2018-05-28 09:29:06.750","2018-05-28 09:34:36.260","2018-05-28 09:40:01.260","2018-05-28 09:45:33.460","2018-06-02 20:27:15.550","2018-06-02 20:32:43.040","2018-06-02 20:38:01.040","2018-06-02 20:43:19.140","2018-06-02 20:48:43.650","2018-06-02 20:53:56.640","2018-06-02 20:59:11.640","2018-06-02 21:04:27.740","2018-06-02 21:09:55.230","2018-06-02 21:15:20.040","2018-06-02 21:20:44.040","2018-06-02 21:25:43.530","2018-06-02 21:30:45.040","2018-06-02 21:37:16.140","2018-06-02 21:42:51.240","2018-06-02 21:48:13.750","2018-06-02 21:53:31.440","2018-06-02 21:58:44.840","2018-06-02 22:03:45.840","2018-06-02 22:08:57.830","2018-06-02 22:14:17.340","2018-06-02 22:19:38.940","2018-06-02 22:34:54.400","2018-06-02 22:40:49.500","2018-06-03 12:22:07.800","2018-06-03 12:26:51.730","2018-06-03 12:32:11.240","2018-06-03 12:37:25.930","2018-06-03 12:42:41.230","2018-06-03 12:48:04.330","2018-06-03 12:52:52.840","2018-06-03 12:58:21.940","2018-06-03 13:03:45.430","2018-06-03 13:08:52.940","2018-06-03 13:14:09.940","2018-06-03 13:19:32.430","2018-06-03 13:24:38.940","2018-06-03 13:30:05.040","2018-06-03 13:35:09.030","2018-06-03 13:40:33.540","2018-06-03 13:45:50.540","2018-06-03 13:50:44.140","2018-06-03 13:55:44.040","2018-06-03 14:00:39.540","2018-06-03 14:05:54.030","2018-06-03 14:11:07.630","2018-06-03 14:16:28.230","2018-06-03 15:25:22.110","2018-06-03 15:30:50.120","2018-06-03 15:36:16.720","2018-06-03 15:41:41.720","2018-06-03 15:46:48.210","2018-06-03 15:51:51.220","2018-06-03 15:56:57.210","2018-06-03 16:02:10.310","2018-06-03 16:07:07.320","2018-06-03 16:12:28.820","2018-06-03 16:17:51.310","2018-06-03 16:23:00.820","2018-06-03 17:37:01.300","2018-06-03 17:42:25.900","2018-06-03 17:47:20.400","2018-06-03 17:52:33.890","2018-06-03 17:57:54.400","2018-06-03 18:02:41.400","2018-06-03 18:07:36.890","2018-06-03 18:12:25.900","2018-06-03 18:17:21.000","2018-06-03 18:22:44.900","2018-06-03 18:28:04.550","2018-06-03 18:33:01.540","2018-06-03 19:51:16.330","2018-06-03 19:57:11.940","2018-06-03 20:02:36.630","2018-06-03 20:08:00.050","2018-06-03 20:13:26.040","2018-06-03 20:18:50.140","2018-06-03 20:34:21.850","2018-06-03 20:39:28.360","2018-06-03 20:44:54.960","2018-06-03 20:49:49.450","2018-06-03 20:55:02.950","2018-06-03 21:00:07.440","2018-06-03 21:05:07.450","2018-06-03 21:10:00.950","2018-06-03 21:14:59.940","2018-06-03 21:20:03.450","2018-06-03 21:25:25.460","2018-06-03 21:30:46.060","2018-06-03 21:35:43.050","2018-06-03 21:40:31.640","2018-06-03 21:45:22.950","2018-06-03 21:50:22.950","2018-06-03 21:55:39.440","2018-06-03 22:00:50.040","2018-06-03 22:06:03.550","2018-06-03 22:11:07.550","2018-06-03 22:16:14.040","2018-06-03 22:21:17.050","2018-06-03 22:26:16.840","2018-06-03 22:31:19.940","2018-06-03 22:36:16.450","2018-06-03 22:41:29.940","2018-06-03 22:46:31.040","2018-06-03 22:51:27.450","2018-06-03 22:56:42.940","2018-06-04 04:44:54.600","2018-06-04 04:50:23.100","2018-06-04 04:55:47.210","2018-06-04 05:00:50.210","2018-06-04 05:06:06.710","2018-06-04 05:11:16.710","2018-06-04 05:16:40.810","2018-06-04 05:21:54.800","2018-06-04 05:27:22.310","2018-06-04 05:32:44.910","2018-06-04 05:37:42.400","2018-06-04 05:43:04.910","2018-06-04 06:31:44.570","2018-06-04 06:37:04.570","2018-06-04 06:42:27.560","2018-06-04 06:47:44.660","2018-06-04 06:53:12.170","2018-06-04 06:58:16.670","2018-06-04 07:03:22.160","2018-06-04 07:08:36.670","2018-06-04 07:14:00.770","2018-06-04 07:19:23.260","2018-06-04 07:24:35.470","2018-06-04 07:29:58.370","2018-06-04 07:35:03.870","2018-06-04 07:40:26.860","2018-06-04 07:45:27.870","2018-06-04 07:50:46.060","2018-06-04 07:55:55.970","2018-06-04 08:01:02.960","2018-06-04 08:05:53.470","2018-06-04 08:10:52.960","2018-06-04 08:15:51.470","2018-06-04 08:21:05.970","2018-06-04 08:26:12.760","2018-06-04 09:54:22.300","2018-06-04 10:00:30.300","2018-06-04 10:05:49.310","2018-06-04 10:11:17.910","2018-06-04 10:16:45.900","2018-06-04 10:22:50.500","2018-06-04 10:28:56.100","2018-06-04 10:35:15.800","2018-06-04 10:41:35.900","2018-06-04 10:47:50.500","2018-06-04 10:52:42.600","2018-06-04 10:58:20.200","2018-06-04 11:04:39.800","2018-06-04 15:23:20.800","2018-06-04 15:28:36.390","2018-06-04 15:33:43.400","2018-06-04 15:40:00.000","2018-06-04 15:44:50.010","2018-06-04 15:51:00.590","2018-06-04 15:57:01.690","2018-06-04 16:03:02.790","2018-06-04 16:09:18.390","2018-06-04 16:15:35.110","2018-06-04 16:21:42.710","2018-06-04 16:26:38.200","2018-06-04 16:32:54.300","2018-06-04 18:59:46.830","2018-06-04 19:05:07.930","2018-06-04 19:10:23.920","2018-06-04 19:15:55.020","2018-06-04 19:21:09.020","2018-06-04 19:32:13.350","2018-06-04 19:38:12.450","2018-06-04 19:44:15.040","2018-06-04 19:50:12.640","2018-06-04 19:56:28.240","2018-06-04 20:02:12.840","2018-06-05 00:10:05.010","2018-06-05 00:15:43.610","2018-06-05 00:20:33.110","2018-06-05 00:25:28.100","2018-06-05 00:30:15.610","2018-06-05 00:35:12.500","2018-06-05 00:40:57.110","2018-06-05 00:51:14.480","2018-06-05 00:56:25.490","2018-06-05 01:02:39.090","2018-06-05 01:08:43.880","2018-06-05 01:14:52.280","2018-06-05 04:16:45.470","2018-06-05 04:22:27.960","2018-06-05 04:27:52.060","2018-06-05 04:32:58.060","2018-06-05 04:38:52.660","2018-06-05 04:44:16.170","2018-06-05 04:49:10.160","2018-06-05 04:54:06.000","2018-06-05 04:59:17.910","2018-06-05 05:04:34.400","2018-06-05 05:09:42.400","2018-06-05 05:15:06.000","2018-06-05 06:31:22.610","2018-06-05 06:37:06.690","2018-06-05 06:42:23.700","2018-06-05 06:47:38.210","2018-06-05 07:03:24.240","2018-06-05 07:08:15.250","2018-06-05 07:13:32.240","2018-06-05 07:18:53.740","2018-06-05 07:23:55.230","2018-06-05 07:28:49.240","2018-06-05 08:47:10.040","2018-06-05 09:03:04.490","2018-06-05 09:08:29.890","2018-06-05 09:13:54.390","2018-06-05 09:19:17.490","2018-06-05 09:24:43.000","2018-06-05 09:30:09.990","2018-06-05 09:35:20.090","2018-06-05 09:40:45.100","2018-06-05 09:46:08.590","2018-06-05 09:51:03.590","2018-06-05 09:56:16.600","2018-06-05 10:01:40.700","2018-06-05 10:06:28.690","2018-06-05 10:11:53.700","2018-06-05 10:17:21.330","2018-06-05 10:22:45.790","2018-06-05 10:27:40.790","2018-06-05 10:33:00.800","2018-06-05 10:38:12.790","2018-06-05 10:43:39.890","2018-06-05 10:49:06.890","2018-06-05 10:53:57.360","2018-06-05 13:14:31.960","2018-06-05 13:20:25.060","2018-06-05 13:25:43.160","2018-06-05 13:31:08.660","2018-06-05 13:36:32.650","2018-06-05 13:52:29.950","2018-06-05 13:57:53.950","2018-06-05 14:03:01.050","2018-06-05 14:08:26.960","2018-06-05 14:13:52.060","2018-06-05 14:19:16.550","2018-06-05 14:24:38.660","2018-06-05 15:49:41.460","2018-06-05 15:55:07.860","2018-06-05 16:00:35.370","2018-06-05 16:06:01.460","2018-06-05 16:11:19.470","2018-06-05 16:17:17.060","2018-06-05 16:23:13.160","2018-06-05 16:29:09.770","2018-06-05 16:35:06.860","2018-06-05 16:41:02.460","2018-06-05 16:47:00.070","2018-06-05 16:52:57.670","2018-06-05 16:58:53.260","2018-06-05 20:07:42.550","2018-06-05 20:13:24.640","2018-06-05 20:18:48.640","2018-06-05 20:24:01.650","2018-06-05 20:29:02.140","2018-06-05 20:34:24.740","2018-06-05 20:40:08.340","2018-06-05 20:45:30.850","2018-06-05 20:50:56.350","2018-06-05 20:56:20.450","2018-06-05 21:02:34.050","2018-06-05 21:07:22.040","2018-06-05 21:12:47.280","2018-06-05 21:33:22.420","2018-06-05 21:38:50.320","2018-06-05 21:44:11.830","2018-06-05 21:49:35.430","2018-06-05 21:54:56.920","2018-06-05 22:00:17.520","2018-06-05 22:06:33.630","2018-06-05 22:12:48.230","2018-06-05 22:18:07.720","2018-06-05 22:23:33.320","2018-06-05 22:28:52.320","2018-06-05 22:34:32.920","2018-06-05 22:40:29.020","2018-06-06 06:52:13.680","2018-06-06 06:58:58.280","2018-06-06 07:05:13.980","2018-06-06 07:11:27.690","2018-06-06 07:16:36.590","2018-06-06 07:21:45.080","2018-06-06 07:27:57.180","2018-06-06 07:33:07.180","2018-06-06 07:38:34.280","2018-06-06 07:43:35.790","2018-06-06 07:49:23.390","2018-06-06 07:54:48.380","2018-06-06 07:59:56.890","2018-06-06 08:12:51.920","2018-06-06 08:18:12.930","2018-06-06 08:23:02.920","2018-06-06 08:28:26.220","2018-06-06 08:34:18.530","2018-06-06 08:40:23.720","2018-06-06 08:47:01.330","2018-06-06 08:52:49.420","2018-06-06 08:58:54.020","2018-06-06 09:05:10.630","2018-06-06 09:11:14.730","2018-06-06 09:17:30.930","2018-06-06 09:23:44.030","2018-06-06 09:34:17.390","2018-06-06 09:39:08.190","2018-06-06 09:44:30.290","2018-06-06 09:49:45.800","2018-06-06 09:54:35.290","2018-06-06 09:59:45.800","2018-06-06 10:05:15.290","2018-06-06 10:10:39.900","2018-06-06 10:15:48.390","2018-06-06 10:20:51.900","2018-06-06 10:27:41.590","2018-06-06 10:45:41.230","2018-06-06 10:50:32.270","2018-06-06 10:55:56.230","2018-06-06 11:01:01.730","2018-06-06 11:06:51.340","2018-06-06 11:11:37.840","2018-06-06 11:17:06.330","2018-06-06 11:22:57.930","2018-06-06 11:28:21.440","2018-06-06 11:33:22.930","2018-06-06 11:38:29.940","2018-06-06 11:43:53.540","2018-06-06 11:49:14.540","2018-06-06 13:11:32.400","2018-06-06 13:16:39.400","2018-06-06 13:21:40.410","2018-06-06 13:27:06.000","2018-06-06 13:32:30.510","2018-06-06 13:38:20.590","2018-06-06 13:44:18.700","2018-06-06 13:50:15.300","2018-06-06 13:56:26.400","2018-06-06 14:01:12.390","2018-06-06 14:06:36.900","2018-06-06 14:11:54.510","2018-06-06 16:01:08.600","2018-06-06 16:07:07.200","2018-06-06 16:12:06.210","2018-06-06 16:17:05.110","2018-06-06 16:22:31.710","2018-06-06 16:27:41.200","2018-06-06 16:33:03.710","2018-06-06 16:38:29.640","2018-06-06 16:43:51.130","2018-06-06 16:49:17.940","2018-06-06 16:54:20.230","2018-06-06 16:59:45.240","2018-06-06 17:04:45.730","2018-06-06 17:10:02.240","2018-06-06 17:15:13.340","2018-06-06 17:20:33.330","2018-06-06 17:25:33.840","2018-06-06 17:30:54.830","2018-06-06 17:36:20.530","2018-06-06 17:41:44.440","2018-06-06 17:47:00.930","2018-06-06 17:52:22.030","2018-06-06 17:57:45.530","2018-06-06 18:03:08.040","2018-06-06 18:08:31.140","2018-06-06 18:13:53.130","2018-06-06 19:27:20.930","2018-06-06 19:33:08.040","2018-06-06 19:38:31.640","2018-06-06 19:43:55.130","2018-06-06 19:49:14.640","2018-06-06 19:54:37.740","2018-06-06 19:59:57.230","2018-06-06 20:05:21.240","2018-06-06 20:10:28.360","2018-06-06 20:15:52.340","2018-06-06 20:21:03.830","2018-06-07 01:02:39.600","2018-06-07 01:08:00.500","2018-06-07 01:13:22.510","2018-06-07 01:18:32.000","2018-06-07 01:23:51.990","2018-06-07 01:29:12.090","2018-06-07 01:34:39.600","2018-06-07 03:52:20.110","2018-06-07 03:57:41.110","2018-06-07 04:02:40.110","2018-06-07 04:07:47.610","2018-06-07 04:13:02.110","2018-06-07 04:18:05.110","2018-06-07 04:23:00.610","2018-06-07 04:28:14.110","2018-06-07 04:33:13.110","2018-06-07 04:38:15.340","2018-06-07 04:43:12.350","2018-06-07 07:18:06.510","2018-06-07 07:23:19.520","2018-06-07 07:28:43.620","2018-06-07 07:34:08.620","2018-06-07 07:39:35.110","2018-06-07 07:45:01.210","2018-06-07 07:50:16.220","2018-06-07 07:55:39.820","2018-06-07 08:01:08.810","2018-06-07 08:06:26.820","2018-06-07 08:11:47.410","2018-06-07 08:17:01.920","2018-06-07 08:22:24.910","2018-06-07 08:27:47.010","2018-06-07 08:33:34.020","2018-06-07 08:39:22.610","2018-06-07 08:44:54.200","2018-06-07 08:50:25.210","2018-06-07 08:55:56.310","2018-06-07 09:01:23.910","2018-06-07 09:06:56.900","2018-06-07 09:12:19.910","2018-06-07 09:17:45.900","2018-06-07 09:23:16.010","2018-06-07 09:28:42.110","2018-06-07 12:48:01.140","2018-06-07 12:53:45.740","2018-06-07 12:59:11.340","2018-06-07 13:04:11.370","2018-06-07 13:09:31.840","2018-06-07 15:45:44.200","2018-06-07 15:51:06.710","2018-06-07 15:56:27.310","2018-06-07 16:01:52.750","2018-06-07 16:07:15.740","2018-06-07 16:12:37.840","2018-06-07 16:17:58.850","2018-06-07 16:23:21.340","2018-06-07 16:28:44.940","2018-06-07 16:34:05.450","2018-06-07 16:39:25.440","2018-06-07 16:44:46.050","2018-06-07 16:50:07.540","2018-06-07 16:55:34.140","2018-06-07 17:00:35.650","2018-06-07 17:05:52.640","2018-06-07 17:11:14.150","2018-06-07 17:16:38.250","2018-06-07 17:22:03.240","2018-06-07 17:26:56.250","2018-06-07 17:32:22.240","2018-06-07 17:37:33.250","2018-06-07 17:42:54.840","2018-06-07 17:48:22.850","2018-06-07 17:53:41.950","2018-06-08 09:46:59.130","2018-06-08 09:52:26.730","2018-06-08 09:57:45.730","2018-06-08 10:02:42.230","2018-06-08 10:07:35.720","2018-06-08 10:12:22.230","2018-06-08 10:17:17.630","2018-06-08 10:22:26.230","2018-06-08 10:27:53.720","2018-06-08 10:33:13.230","2018-06-08 10:38:29.820","2018-06-08 10:43:52.830","2018-06-08 11:56:30.160","2018-06-08 12:01:53.150","2018-06-08 12:06:44.660","2018-06-08 12:11:51.150","2018-06-08 12:16:55.250","2018-06-08 12:22:01.150","2018-06-08 12:27:01.660","2018-06-08 12:32:18.150","2018-06-08 12:37:42.750","2018-06-08 12:43:06.260","2018-06-08 12:58:14.540","2018-06-08 15:06:02.610","2018-06-08 15:11:27.610","2018-06-08 15:16:53.720","2018-06-08 15:22:17.210","2018-06-08 15:27:42.200","2018-06-08 15:33:02.800","2018-06-08 15:37:53.810","2018-06-08 15:43:15.300","2018-06-08 15:48:39.810","2018-06-08 15:53:40.800","2018-06-08 15:59:04.410","2018-06-08 16:04:28.410","2018-06-08 16:09:44.910","2018-06-08 16:14:57.510","2018-06-08 16:20:05.500","2018-06-08 16:25:27.600","2018-06-08 16:30:49.500","2018-06-08 16:36:10.600","2018-06-08 16:41:00.610","2018-06-08 16:46:24.600","2018-06-08 16:51:49.110","2018-06-08 16:57:13.210","2018-06-08 17:02:16.710","2018-06-08 17:07:39.120","2018-06-08 17:12:36.040","2018-06-08 22:03:15.940","2018-06-08 22:08:05.440","2018-06-08 22:13:26.940","2018-06-08 22:18:38.550","2018-06-08 22:24:03.540","2018-06-08 22:44:53.650","2018-06-08 22:50:19.140","2018-06-08 22:55:28.650","2018-06-08 23:00:49.250","2018-06-09 02:40:15.030","2018-06-09 02:45:34.020","2018-06-09 02:50:28.530","2018-06-09 02:55:53.620","2018-06-09 03:01:16.120","2018-06-09 03:06:27.620","2018-06-09 03:11:40.120","2018-06-09 03:16:36.620","2018-06-09 03:22:02.220","2018-06-09 03:27:26.730","2018-06-09 03:32:49.220","2018-06-09 03:37:57.230","2018-06-09 03:43:18.830","2018-06-09 08:58:06.140","2018-06-09 09:03:58.740","2018-06-09 09:08:56.750","2018-06-09 09:13:53.740","2018-06-09 09:20:04.340","2018-06-09 09:26:09.450","2018-06-09 09:32:07.030","2018-06-09 09:38:22.140","2018-06-09 09:44:19.740","2018-06-09 09:50:38.840","2018-06-09 09:55:27.840","2018-06-09 10:02:24.030","2018-06-09 10:08:13.640","2018-06-09 10:33:38.920","2018-06-09 10:38:52.020","2018-06-09 10:44:13.510","2018-06-09 10:49:10.520","2018-06-09 10:54:58.120","2018-06-09 11:00:59.210","2018-06-09 11:06:52.920","2018-06-09 11:12:50.510","2018-06-09 11:18:47.610","2018-06-09 11:24:44.510","2018-06-09 11:30:29.610","2018-06-09 11:36:55.810","2018-06-09 11:43:04.920","2018-06-09 16:11:38.030","2018-06-09 16:17:42.630","2018-06-09 16:23:56.220","2018-06-09 16:29:46.330","2018-06-09 16:35:46.920","2018-06-09 16:41:35.030","2018-06-09 16:46:48.030","2018-06-09 16:52:38.630","2018-06-09 16:58:47.720","2018-06-09 17:04:50.030","2018-06-09 17:10:37.420","2018-06-09 17:16:43.030","2018-06-09 19:52:01.370","2018-06-09 19:57:43.460","2018-06-09 20:03:06.970","2018-06-09 20:08:21.070","2018-06-09 20:13:48.060","2018-06-09 20:19:41.570","2018-06-09 20:24:57.170","2018-06-09 20:30:22.170","2018-06-09 20:36:18.270","2018-06-09 20:41:43.260","2018-06-09 20:46:57.860","2018-06-09 20:52:42.870","2018-06-09 21:07:23.860","2018-06-09 21:12:58.470","2018-06-09 21:18:24.480","2018-06-09 21:23:15.470","2018-06-09 21:35:37.600","2018-06-09 21:41:29.190","2018-06-09 21:46:50.190","2018-06-09 21:52:16.300","2018-06-09 21:58:04.490","2018-06-09 22:03:33.390","2018-06-09 22:10:27.790","2018-06-09 22:15:54.220","2018-06-09 23:47:53.000","2018-06-09 23:52:56.300","2018-06-09 23:58:04.400","2018-06-10 00:04:19.010","2018-06-10 00:10:33.090","2018-06-10 00:16:46.200","2018-06-10 00:23:01.800","2018-06-10 00:29:15.500","2018-06-10 00:35:13.100","2018-06-10 00:41:25.700","2018-06-10 00:46:40.200","2018-06-10 00:52:03.800","2018-06-10 00:57:24.310","2018-06-10 01:02:21.800","2018-06-10 02:55:19.640","2018-06-10 03:00:59.740","2018-06-10 03:06:08.250","2018-06-10 03:11:50.330","2018-06-10 03:16:38.340","2018-06-10 03:22:09.330","2018-06-10 03:28:13.940","2018-06-10 03:34:30.370","2018-06-10 03:40:45.480","2018-06-10 03:46:59.080","2018-06-10 03:51:46.570","2018-06-10 03:56:38.080","2018-06-10 04:02:36.180","2018-06-10 07:23:11.560","2018-06-10 07:28:39.070","2018-06-10 07:33:43.060","2018-06-10 07:38:51.160","2018-06-10 07:44:12.170","2018-06-10 07:49:38.160","2018-06-10 07:54:27.670","2018-06-10 07:59:49.160","2018-06-10 08:05:13.770","2018-06-10 08:10:40.770","2018-06-10 08:15:50.770","2018-06-10 08:21:16.070","2018-06-10 08:26:12.060","2018-06-10 12:52:31.520","2018-06-10 12:57:41.530","2018-06-10 13:03:04.020","2018-06-10 13:08:29.120","2018-06-10 13:13:24.610","2018-06-10 13:18:11.030","2018-06-10 13:23:16.520","2018-06-10 13:28:30.620","2018-06-10 13:33:54.110","2018-06-10 13:39:17.620","2018-06-10 13:44:22.110","2018-06-10 13:49:46.220","2018-06-10 15:03:14.410","2018-06-10 15:08:39.000","2018-06-10 15:13:38.000","2018-06-10 15:19:03.000","2018-06-10 15:24:22.510","2018-06-10 15:29:11.000","2018-06-10 15:34:36.010","2018-06-10 15:40:00.610","2018-06-10 15:45:07.100","2018-06-10 15:50:14.610","2018-06-10 15:55:17.100","2018-06-10 16:00:07.110","2018-06-10 18:36:58.120","2018-06-10 18:42:05.130","2018-06-10 18:47:26.420","2018-06-10 18:52:45.130","2018-06-10 18:58:04.730","2018-06-10 19:03:27.720","2018-06-10 19:08:24.220","2018-06-10 19:14:29.820","2018-06-10 19:20:09.530","2018-06-10 19:26:15.520","2018-06-10 19:32:12.130","2018-06-10 19:38:23.720","2018-06-10 19:44:34.820","2018-06-10 19:57:40.120","2018-06-10 20:03:32.220","2018-06-10 20:08:49.720","2018-06-10 20:14:14.820","2018-06-10 20:19:37.830","2018-06-10 20:25:34.930","2018-06-10 20:31:24.020","2018-06-10 20:41:36.250","2018-06-10 20:47:03.260","2018-06-10 20:51:52.750","2018-06-10 20:57:16.850","2018-06-10 21:02:45.360","2018-06-10 21:17:06.760","2018-06-10 21:22:41.360","2018-06-10 21:27:49.350","2018-06-10 21:33:01.360","2018-06-10 21:38:33.970","2018-06-10 21:44:48.050","2018-06-10 21:50:53.660","2018-06-10 21:57:07.760","2018-06-10 22:03:13.360","2018-06-10 22:09:22.060","2018-06-10 22:15:12.550","2018-06-10 22:20:38.150","2018-06-10 22:25:53.160","2018-06-10 22:36:32.810","2018-06-10 22:41:54.320","2018-06-10 22:47:20.810","2018-06-10 22:52:45.420","2018-06-10 23:10:50.710","2018-06-10 23:16:12.220","2018-06-10 23:21:18.910","2018-06-10 23:26:16.220","2018-06-10 23:32:30.410","2018-06-10 23:38:33.520","2018-06-10 23:44:49.120","2018-06-10 23:51:08.710","2018-06-10 23:56:31.810","2018-06-11 00:01:55.320","2018-06-11 00:07:09.810","2018-06-11 00:12:08.320","2018-06-11 00:17:51.420","2018-06-11 01:54:59.430","2018-06-11 01:59:43.920","2018-06-11 02:05:26.430","2018-06-11 02:10:26.130","2018-06-11 02:15:36.930","2018-06-11 02:21:07.040","2018-06-11 02:27:05.120","2018-06-11 02:45:18.500","2018-06-11 02:51:15.600","2018-06-11 02:57:19.690","2018-06-11 03:03:31.290","2018-06-11 12:01:54.570","2018-06-11 12:07:18.670","2018-06-11 12:12:44.770","2018-06-11 12:18:06.670","2018-06-11 12:23:32.180","2018-06-11 12:28:52.270","2018-06-11 12:34:16.770","2018-06-11 12:39:17.270","2018-06-11 12:44:31.270","2018-06-11 12:49:21.270","2018-06-11 13:04:38.310","2018-06-11 13:10:01.820","2018-06-11 13:15:25.810","2018-06-11 13:20:51.910","2018-06-11 13:25:53.920","2018-06-11 13:30:39.820","2018-06-11 13:35:59.420","2018-06-11 13:41:17.910","2018-06-11 13:46:31.420","2018-06-11 13:52:01.010","2018-06-11 13:57:14.510","2018-06-11 14:02:37.020","2018-06-11 14:08:00.110","2018-06-11 18:37:52.150","2018-06-11 18:42:51.650","2018-06-11 18:47:49.150","2018-06-11 19:03:38.680","2018-06-11 19:08:49.170","2018-06-11 19:13:50.180","2018-06-11 19:19:03.170","2018-06-11 19:24:16.170","2018-06-11 19:29:39.270","2018-06-11 19:35:01.280","2018-06-11 19:40:18.270","2018-06-11 20:48:24.080","2018-06-11 21:04:18.670","2018-06-11 21:09:43.270","2018-06-11 21:14:45.760","2018-06-11 21:20:10.250","2018-06-11 21:24:56.260","2018-06-11 21:30:19.750","2018-06-11 21:35:08.260","2018-06-11 21:40:06.770","2018-06-11 21:45:31.260","2018-06-11 21:50:47.860","2018-06-12 04:22:42.390","2018-06-12 04:28:01.990","2018-06-12 04:32:50.000","2018-06-12 04:38:12.990","2018-06-12 04:43:05.500","2018-06-12 04:48:30.100","2018-06-12 04:53:52.590","2018-06-12 04:59:06.600","2018-06-12 05:04:34.180","2018-06-12 05:09:53.690","2018-06-12 05:15:17.190","2018-06-12 05:20:40.290","2018-06-12 05:26:01.000","2018-06-12 08:39:13.960","2018-06-12 08:45:51.660","2018-06-12 08:51:52.260","2018-06-12 08:57:18.770","2018-06-12 09:02:43.260","2018-06-12 09:07:48.360","2018-06-12 09:12:44.760","2018-06-12 09:17:48.890","2018-06-12 09:22:44.260","2018-06-12 09:27:50.470","2018-06-12 09:32:56.870","2018-06-12 09:38:21.360","2018-06-12 09:43:41.370","2018-06-12 12:07:06.340","2018-06-12 12:13:05.350","2018-06-12 12:18:21.940","2018-06-12 12:23:49.780","2018-06-12 12:29:11.880","2018-06-12 12:34:29.370","2018-06-12 12:39:52.380","2018-06-12 12:44:49.870","2018-06-12 12:49:36.380","2018-06-12 12:54:46.870","2018-06-12 13:00:09.380","2018-06-12 13:05:34.480","2018-06-12 13:10:50.980","2018-06-12 13:15:40.480","2018-06-12 13:21:02.480","2018-06-12 13:25:49.980","2018-06-12 13:31:11.480","2018-06-12 13:35:59.980","2018-06-12 13:41:13.480","2018-06-12 13:46:35.580","2018-06-12 13:51:58.570","2018-06-12 13:57:23.170","2018-06-12 14:02:13.070","2018-06-12 14:07:33.670","2018-06-12 14:12:26.680","2018-06-12 20:13:12.930","2018-06-12 20:18:11.940","2018-06-12 20:23:21.180","2018-06-12 20:28:21.190","2018-06-12 20:33:45.180","2018-06-12 20:39:08.790","2018-06-12 20:44:33.800","2018-06-12 20:50:00.380","2018-06-12 20:54:47.800","2018-06-12 21:00:11.380","2018-06-12 21:05:33.890","2018-06-12 21:10:58.990","2018-06-12 21:16:19.980"]},"id":"7d419e1c-7595-44fe-98d4-0a83f6784e52","type":"FactorRange"},{"attributes":{},"id":"7677fa97-fb14-4f7d-8501-7a5ac89c418f","type":"CategoricalTicker"},{"attributes":{},"id":"c98ec3ea-3aa5-41eb-b76a-af2209967539","type":"SaveTool"},{"attributes":{},"id":"fd4d3ed9-3e7e-4ac6-83b8-9b1792157372","type":"WheelZoomTool"}],"root_ids":["62ec6fc9-3d17-4fa6-8114-4c724e4bcdc6"]},"title":"Bokeh Application","version":"0.12.16"}};
+  var render_items = [{"docid":"67e4108b-2b7a-43c3-a7ba-98e773663696","elementid":"df4ca559-5aa4-42a1-b879-0add2b22d0b6","modelid":"62ec6fc9-3d17-4fa6-8114-4c724e4bcdc6"}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        embed_document(root);
+        clearInterval(timer);
+      }
+      attempts++;
+      if (attempts > 100) {
+        console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing")
+        clearInterval(timer);
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
